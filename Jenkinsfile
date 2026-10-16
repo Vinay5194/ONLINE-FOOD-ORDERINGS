@@ -1,85 +1,50 @@
 
-pipeline {
-    agent any
+stage('Deploy Website') {
+    steps {
+        powershell '''
+            $ErrorActionPreference = "Stop"
+            $port = 8000
 
-    stages {
-        stage('Checkout') {
-            steps {
-                echo 'Downloading code from GitHub'
-                checkout scm
+            # Add your actual Python path here if necessary.
+            $python = "C:\\Python313\\python.exe"
+
+            if (-not (Test-Path $python)) {
+                $python = (Get-Command python.exe `
+                    -ErrorAction SilentlyContinue).Source
             }
-        }
 
-        stage('Test Website Files') {
-            steps {
-                bat 'if not exist index.html exit /b 1'
-                bat 'if not exist style.css exit /b 1'
-                bat 'if not exist script.js exit /b 1'
-
-                echo 'All website files found successfully'
+            if (-not $python -or -not (Test-Path $python)) {
+                throw "Python not found. Set the correct Python path in Jenkinsfile."
             }
-        }
 
-        stage('Deploy Website') {
-            steps {
-                powershell '''
-                    $ErrorActionPreference = "Stop"
-                    $port = 8000
+            $listener = Get-NetTCPConnection `
+                -LocalPort $port `
+                -State Listen `
+                -ErrorAction SilentlyContinue
 
-                    $listener = Get-NetTCPConnection `
-                        -LocalPort $port `
-                        -State Listen `
-                        -ErrorAction SilentlyContinue
+            if (-not $listener) {
+                Start-Process `
+                    -FilePath $python `
+                    -ArgumentList @(
+                        "-m", "http.server",
+                        "$port",
+                        "--directory",
+                        "$env:WORKSPACE"
+                    ) `
+                    -WindowStyle Hidden
 
-                    if (-not $listener) {
-                        $python = (Get-Command python `
-                            -ErrorAction SilentlyContinue).Source
-
-                        if (-not $python) {
-                            $python = (Get-Command py `
-                                -ErrorAction SilentlyContinue).Source
-                        }
-
-                        if (-not $python) {
-                            throw "Python is not installed or not in PATH."
-                        }
-
-                        Start-Process `
-                            -FilePath $python `
-                            -ArgumentList @(
-                                "-m", "http.server",
-                                "$port",
-                                "--directory",
-                                "$env:WORKSPACE"
-                            ) `
-                            -WindowStyle Hidden
-
-                        Start-Sleep -Seconds 3
-                    } else {
-                        Write-Host "Port 8000 already has a server."
-                    }
-
-                    $response = Invoke-WebRequest `
-                        -Uri "http://localhost:8000" `
-                        -UseBasicParsing
-
-                    if ($response.StatusCode -ne 200) {
-                        throw "Website deployment check failed."
-                    }
-
-                    Write-Host "Website is running at http://localhost:8000"
-                '''
+                Start-Sleep -Seconds 3
             }
-        }
-    }
 
-    post {
-        success {
-            echo 'CI/CD pipeline completed successfully!'
-        }
+            $response = Invoke-WebRequest `
+                -Uri "http://localhost:8000" `
+                -UseBasicParsing
 
-        failure {
-            echo 'Build failed. Check Console Output.'
-        }
+            if ($response.StatusCode -ne 200) {
+                throw "Website deployment failed."
+            }
+
+            Write-Host "Website is running at http://localhost:8000"
+        '''
     }
 }
