@@ -1,107 +1,87 @@
 
 node {
     stage('Checkout') {
-        echo 'Downloading project from GitHub'
         checkout scm
+        echo 'GitHub checkout successful'
     }
 
     stage('Test Website Files') {
         if (!fileExists('index.html')) {
             error('index.html is missing')
         }
+
         if (!fileExists('style.css')) {
             error('style.css is missing')
         }
+
         if (!fileExists('script.js')) {
             error('script.js is missing')
         }
 
-        echo 'SUCCESS: All website files found'
-    }
+        if (!fileExists('server.ps1')) {
+            error('server.ps1 is missing')
+        }
 
-    stage('Find Python') {
-        def python = powershell(
-            returnStdout: true,
-            script: '''
-                $ErrorActionPreference = "Stop"
-
-                $cmd = Get-Command python.exe `
-                    -ErrorAction SilentlyContinue
-
-                if ($cmd) {
-                    $cmd.Source
-                    exit 0
-                }
-
-                $cmd = Get-Command py.exe `
-                    -ErrorAction SilentlyContinue
-
-                if ($cmd) {
-                    $cmd.Source
-                    exit 0
-                }
-
-                $paths = @(
-                    "C:\\Python313\\python.exe",
-                    "C:\\Python312\\python.exe",
-                    "C:\\Python311\\python.exe",
-                    "C:\\Program Files\\Python313\\python.exe",
-                    "C:\\Program Files\\Python312\\python.exe"
-                )
-
-                foreach ($p in $paths) {
-                    if (Test-Path $p) {
-                        Write-Output $p
-                        exit 0
-                    }
-                }
-
-                throw "Python not found. Install Python and restart Jenkins."
-            '''
-        ).trim()
-
-        env.PYTHON_EXE = python
-        echo "Python found: ${python}"
+        echo 'SUCCESS: All project files found'
     }
 
     stage('Deploy Website') {
         powershell '''
             $ErrorActionPreference = "Stop"
+
             $port = 8000
+            $url = "http://localhost:$port/"
 
-            $listener = Get-NetTCPConnection `
-                -LocalPort $port `
-                -State Listen `
-                -ErrorAction SilentlyContinue
+            $response = $null
+            try {
+                $response = Invoke-WebRequest `
+                    -Uri $url `
+                    -UseBasicParsing `
+                    -TimeoutSec 2 `
+                    -ErrorAction Stop
+            } catch {
+                $response = $null
+            }
 
-            if (-not $listener) {
+            if ($response -and
+                $response.Content -match "Foodie Express") {
+                Write-Host "Website is already running."
+            } else {
+                if ($response) {
+                    throw "Port 8000 is serving a different website. Stop the old server and rebuild."
+                }
+
+                $serverFile = Join-Path $env:WORKSPACE "server.ps1"
+
+                $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$serverFile`""
+
                 Start-Process `
-                    -FilePath $env:PYTHON_EXE `
-                    -ArgumentList @(
-                        "-m", "http.server",
-                        "$port",
-                        "--directory",
-                        "$env:WORKSPACE"
-                    ) `
+                    -FilePath "powershell.exe" `
+                    -ArgumentList $arguments `
                     -WindowStyle Hidden
 
                 Start-Sleep -Seconds 3
             }
 
-            $response = Invoke-WebRequest `
-                -Uri "http://localhost:8000" `
-                -UseBasicParsing
+            $check = Invoke-WebRequest `
+                -Uri $url `
+                -UseBasicParsing `
+                -TimeoutSec 10
 
-            if ($response.StatusCode -ne 200) {
-                throw "Website health check failed"
+            if ($check.StatusCode -ne 200) {
+                throw "Website health check failed."
             }
 
-            Write-Host "Website deployed successfully!"
-            Write-Host "Open http://localhost:8000"
+            if ($check.Content -notmatch "Foodie Express") {
+                throw "The expected Foodie Express website was not found."
+            }
+
+            Write-Host "Deployment successful!"
+            Write-Host "Website: http://localhost:8000"
         '''
     }
 
-    stage('Pipeline Complete') {
-        echo 'SUCCESS: Online Food Ordering CI/CD pipeline completed'
+    stage('Complete') {
+        echo 'SUCCESS: Online Food Ordering CI/CD pipeline completed!'
     }
 }
